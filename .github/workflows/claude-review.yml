@@ -1,0 +1,35 @@
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          trigger_phrase: "@claude"
+          direct_prompt: |
+            Review this pull request as a senior engineer. Focus on:
+            - Security vulnerabilities (injection, auth bypass, data exposure)
+            - Correctness bugs that would cause runtime failures
+            - Android-specific issues (Kotlin coroutines, Compose, BLE, Room DB)
+            - API contract violations (Anthropic Messages API usage, SSE streaming)
+
+            Skip: style nitpicks, missing comments, theoretical performance concerns,
+            logging of non-sensitive data, and anything already handled by the existing
+            security hardening (EncryptedStorage, SQLCipher, network_security_config).
+
+            Post inline comments only for HIGH-confidence, actionable findings.
+            End with a one-paragraph summary of the overall change quality.
