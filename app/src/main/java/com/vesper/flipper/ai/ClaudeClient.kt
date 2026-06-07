@@ -8,9 +8,12 @@ import com.vesper.flipper.security.RateLimiter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -40,7 +43,8 @@ import javax.inject.Singleton
 @Singleton
 class ClaudeClient @Inject constructor(
     private val settingsStore: SettingsStore,
-    private val openRouterClient: OpenRouterClient
+    private val openRouterClient: OpenRouterClient,
+    private val rateLimiter: ApiRateLimiter
 ) : AiClient {
 
     private val json = Json {
@@ -56,7 +60,35 @@ class ClaudeClient @Inject constructor(
         .retryOnConnectionFailure(true)
         .build()
 
-    private val rateLimiter = RateLimiter(maxRequests = 30, windowMs = 60_000)
+    private data class ClaudeConfig(
+        val apiKey: String,
+        val model: String,
+        val glassesEnabled: Boolean
+    )
+
+    private val claudeConfig: Flow<ClaudeConfig> = combine(
+        settingsStore.claudeApiKey,
+        settingsStore.claudeModel,
+        settingsStore.glassesEnabled
+    ) { apiKey, model, glassesEnabled ->
+        ClaudeConfig(
+            apiKey = apiKey ?: "",
+            model = model ?: "claude-opus-4-7",
+            glassesEnabled = glassesEnabled
+        )
+    }.shareIn(
+        scope = kotlinx.coroutines.GlobalScope,
+        started = SharingStarted.Lazily,
+        replay = 1
+    )
+
+    private val httpRetryExecutor = HttpRetryExecutor(
+        client = httpClient,
+        maxRetries = MAX_RETRIES,
+        initialDelayMs = INITIAL_RETRY_DELAY_MS,
+        maxDelayMs = MAX_RETRY_DELAY_MS,
+        tag = TAG
+    )
 
     // ── Tool definition (Anthropic format uses input_schema, not parameters) ──
 
@@ -70,7 +102,7 @@ class ClaudeClient @Inject constructor(
             "properties" to JsonObject(mapOf(
                 "action" to JsonObject(mapOf(
                     "type" to JsonPrimitive("string"),
-                    "enum" to JsonArray(SUPPORTED_ACTIONS.map { JsonPrimitive(it) }),
+                    "enum" to JsonArray(CommandActions.SUPPORTED_ACTIONS.map { JsonPrimitive(it) }),
                     "description" to JsonPrimitive("The action to perform on the Flipper Zero (request_photo requires smart glasses)")
                 )),
                 "args" to JsonObject(mapOf(
@@ -96,13 +128,20 @@ class ClaudeClient @Inject constructor(
             val props = (schema["properties"] as JsonObject).toMutableMap()
             val actionProp = (props["action"] as JsonObject).toMutableMap()
             actionProp["enum"] = JsonArray(
-                SUPPORTED_ACTIONS.filter { it != "request_photo" }.map { JsonPrimitive(it) }
+                CommandActions.SUPPORTED_ACTIONS.filter { it != "request_photo" }.map { JsonPrimitive(it) }
             )
             props["action"] = JsonObject(actionProp)
             schema["properties"] = JsonObject(props)
             this["input_schema"] = JsonObject(schema)
         }
     )
+
+    private val executeCommandToolWithoutGlassesCache by lazy {
+        executeCommandToolWithoutGlasses()
+    }
+
+    private fun getExecuteCommandTool(glassesEnabled: Boolean): JsonObject =
+        if (glassesEnabled) executeCommandTool else executeCommandToolWithoutGlassesCache
 
     // ── AiClient implementation ───────────────────────────────────────────────
 
@@ -117,14 +156,17 @@ class ClaudeClient @Inject constructor(
             )
         }
 
-        val apiKey = settingsStore.claudeApiKey.first()
-            ?: return@withContext ChatCompletionResult.Error("Anthropic API key not configured")
-        if (!isValidClaudeApiKey(apiKey)) {
+        val config = claudeConfig.first()
+        if (config.apiKey.isEmpty()) {
+            return@withContext ChatCompletionResult.Error("Anthropic API key not configured")
+        }
+        if (!InputValidator.isValidApiKey(config.apiKey)) {
             return@withContext ChatCompletionResult.Error("Invalid Anthropic API key format")
         }
 
-        val model = settingsStore.claudeModel.first()
-        val glassesEnabled = settingsStore.glassesEnabled.first()
+        val apiKey = config.apiKey
+        val model = config.model
+        val glassesEnabled = config.glassesEnabled
 
         val systemPrompt = if (glassesEnabled) {
             VesperPrompts.SYSTEM_PROMPT + "\n\n" + VesperPrompts.SMARTGLASSES_ADDENDUM
@@ -132,7 +174,7 @@ class ClaudeClient @Inject constructor(
             VesperPrompts.SYSTEM_PROMPT
         }
 
-        val tool = if (glassesEnabled) executeCommandTool else executeCommandToolWithoutGlasses()
+        val tool = getExecuteCommandTool(glassesEnabled)
         val anthropicMessages = buildAnthropicMessages(messages)
 
         val requestBody = buildJsonObject {
@@ -169,23 +211,25 @@ class ClaudeClient @Inject constructor(
             emit(ChatStreamEvent.StreamError("Rate limit exceeded"))
             return@flow
         }
-        val apiKey = settingsStore.claudeApiKey.first() ?: run {
+        val config = claudeConfig.first()
+        if (config.apiKey.isEmpty()) {
             emit(ChatStreamEvent.StreamError("Anthropic API key not configured"))
             return@flow
         }
-        if (!isValidClaudeApiKey(apiKey)) {
+        if (!InputValidator.isValidApiKey(config.apiKey)) {
             emit(ChatStreamEvent.StreamError("Invalid Anthropic API key format"))
             return@flow
         }
 
-        val model = settingsStore.claudeModel.first()
-        val glassesEnabled = settingsStore.glassesEnabled.first()
+        val apiKey = config.apiKey
+        val model = config.model
+        val glassesEnabled = config.glassesEnabled
         val systemPrompt = if (glassesEnabled) {
             VesperPrompts.SYSTEM_PROMPT + "\n\n" + VesperPrompts.SMARTGLASSES_ADDENDUM
         } else {
             VesperPrompts.SYSTEM_PROMPT
         }
-        val tool = if (glassesEnabled) executeCommandTool else executeCommandToolWithoutGlasses()
+        val tool = getExecuteCommandTool(glassesEnabled)
         val anthropicMessages = buildAnthropicMessages(messages)
 
         val requestBody = buildJsonObject {
@@ -376,10 +420,12 @@ class ClaudeClient @Inject constructor(
 
     override suspend fun chatSimple(prompt: String): String? = withContext(Dispatchers.IO) {
         if (!rateLimiter.tryAcquire()) return@withContext null
-        val apiKey = settingsStore.claudeApiKey.first() ?: return@withContext null
-        if (!isValidClaudeApiKey(apiKey)) return@withContext null
+        val config = claudeConfig.first()
+        if (config.apiKey.isEmpty()) return@withContext null
+        if (!InputValidator.isValidApiKey(config.apiKey)) return@withContext null
 
-        val model = settingsStore.claudeModel.first()
+        val apiKey = config.apiKey
+        val model = config.model
         val requestBody = buildJsonObject {
             put("model", model)
             put("max_tokens", SIMPLE_MAX_TOKENS)
@@ -412,13 +458,16 @@ class ClaudeClient @Inject constructor(
         if (!rateLimiter.tryAcquire()) {
             return@withContext Result.failure(Exception("Rate limit exceeded"))
         }
-        val apiKey = settingsStore.claudeApiKey.first()
-            ?: return@withContext Result.failure(Exception("Anthropic API key not configured"))
-        if (!isValidClaudeApiKey(apiKey)) {
+        val config = claudeConfig.first()
+        if (config.apiKey.isEmpty()) {
+            return@withContext Result.failure(Exception("Anthropic API key not configured"))
+        }
+        if (!InputValidator.isValidApiKey(config.apiKey)) {
             return@withContext Result.failure(Exception("Invalid Anthropic API key format"))
         }
 
-        val model = settingsStore.claudeModel.first()
+        val apiKey = config.apiKey
+        val model = config.model
         val system = customSystemPrompt ?: VesperPrompts.SYSTEM_PROMPT
         val anthropicMessages = buildAnthropicMessages(messages)
 
@@ -465,7 +514,7 @@ class ClaudeClient @Inject constructor(
         val requestBody = buildJsonObject {
             put("model", model)
             put("max_tokens", 500)
-            put("system", VISION_SYSTEM_PROMPT)
+            put("system", VisionConfig.VISION_SYSTEM_PROMPT)
             putJsonArray("messages") {
                 add(buildJsonObject {
                     put("role", "user")
@@ -679,54 +728,22 @@ class ClaudeClient @Inject constructor(
             .post(body)
             .build()
 
-        var lastError: Exception? = null
-        var delayMs = INITIAL_RETRY_DELAY_MS
-
-        repeat(MAX_RETRIES) { attempt ->
-            try {
-                httpClient.newCall(request).execute().use { response ->
-                    val responseBody = response.body?.string()
-
-                    if (response.code == 429) {
-                        val retryAfter = response.header("retry-after")?.toLongOrNull() ?: 60
-                        delay(retryAfter * 1000)
-                        return@repeat
-                    }
-
-                    if (response.code in 500..599) {
-                        lastError = IOException("Server error: ${response.code}")
-                        delay(delayMs)
-                        delayMs = (delayMs * 2).coerceAtMost(MAX_RETRY_DELAY_MS)
-                        return@repeat
-                    }
-
-                    if (!response.isSuccessful) {
-                        val errBody = responseBody ?: "unknown error"
-                        Log.e(TAG, "Claude API error ${response.code}: $errBody")
-                        return parseErrorBody(response.code, errBody)
-                    }
-
-                    if (responseBody == null) {
-                        return ChatCompletionResult.Error("Empty response from Anthropic API")
-                    }
-
-                    return parseClaudeResponse(responseBody)
+        return httpRetryExecutor.execute(
+            request = request,
+            parseResponse = { responseBody ->
+                if (responseBody.isEmpty()) {
+                    ChatCompletionResult.Error("Empty response from Anthropic API")
+                } else {
+                    parseClaudeResponse(responseBody)
                 }
-            } catch (e: SocketTimeoutException) {
-                lastError = e
-                delay(delayMs)
-                delayMs = (delayMs * 2).coerceAtMost(MAX_RETRY_DELAY_MS)
-            } catch (e: IOException) {
-                lastError = e
-                delay(delayMs)
-                delayMs = (delayMs * 2).coerceAtMost(MAX_RETRY_DELAY_MS)
-            } catch (e: Exception) {
-                return ChatCompletionResult.Error("Request failed: ${e.message}")
+            },
+            onError = { code, message ->
+                if (code != 0) {
+                    parseErrorBody(code, message)
+                } else {
+                    ChatCompletionResult.Error(message)
+                }
             }
-        }
-
-        return ChatCompletionResult.Error(
-            "Request failed after $MAX_RETRIES attempts: ${lastError?.message}"
         )
     }
 
@@ -823,10 +840,6 @@ class ClaudeClient @Inject constructor(
         else -> "high"
     }
 
-    private fun isValidClaudeApiKey(key: String): Boolean {
-        // Claude keys look like: sk-ant-api03-...  or  sk-ant-...
-        return key.length in 10..500 && key.matches(Regex("^[a-zA-Z0-9_.\\-:]+\$"))
-    }
 
     companion object {
         private const val TAG = "ClaudeClient"
@@ -842,12 +855,6 @@ class ClaudeClient @Inject constructor(
         private const val SIMPLE_MAX_TOKENS = 6144     // no thinking, single-turn
         private const val DEFAULT_MAX_TOKENS = 4096    // thinking + conversational response
 
-        private const val VISION_SYSTEM_PROMPT =
-            "You are a visual analysis assistant for a Flipper Zero companion app. " +
-            "Describe what you see in the image in detail. Focus on: brand names, model numbers, " +
-            "device types (TV, AC, car, remote control, gate, etc.), any visible text or labels, " +
-            "and any details that would help identify the correct IR/RF/NFC protocol or signal. " +
-            "Be specific and concise."
 
         val CLAUDE_MODELS = listOf(
             com.vesper.flipper.data.ModelInfo("claude-opus-4-7", "Claude Opus 4.7", "Most capable"),
@@ -856,15 +863,5 @@ class ClaudeClient @Inject constructor(
         )
         const val DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 
-        private val SUPPORTED_ACTIONS = listOf(
-            "list_directory", "read_file", "write_file", "create_directory",
-            "delete", "move", "rename", "copy", "get_device_info", "get_storage_info",
-            "search_faphub", "install_faphub_app", "push_artifact", "execute_cli",
-            "forge_payload", "search_resources", "list_vault", "run_runbook",
-            "launch_app", "subghz_transmit", "ir_transmit", "nfc_emulate",
-            "rfid_emulate", "ibutton_emulate", "badusb_execute", "ble_spam",
-            "led_control", "vibro_control", "browse_repo", "download_resource",
-            "github_search", "request_photo"
-        )
     }
 }

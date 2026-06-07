@@ -23,7 +23,7 @@ interface AiClient {
         messages: List<ChatMessage>,
         customSystemPrompt: String? = null
     ): Result<String>
-    fun parseCommandDetailed(arguments: String): OpenRouterClient.ParsedCommand
+    fun parseCommandDetailed(arguments: String): ParsedCommand
     fun formatResult(result: CommandResult): String
     suspend fun describeImageForAgent(attachment: ImageAttachment, prompt: String): String?
 }
