@@ -36,7 +36,8 @@ import javax.inject.Singleton
  */
 @Singleton
 class OpenRouterClient @Inject constructor(
-    private val settingsStore: SettingsStore
+    private val settingsStore: SettingsStore,
+    private val rateLimiter: ApiRateLimiter
 ) : AiClient {
 
     private val json = Json {
@@ -53,8 +54,6 @@ class OpenRouterClient @Inject constructor(
         .retryOnConnectionFailure(true)
         .build()
 
-    // Rate limiter: 30 requests per minute
-    private val rateLimiter = RateLimiter(maxRequests = 30, windowMs = 60_000)
     private val toolUnsupportedModels = ConcurrentHashMap<String, Long>()
 
     // Retry configuration

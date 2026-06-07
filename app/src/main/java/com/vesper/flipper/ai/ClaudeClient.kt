@@ -43,7 +43,8 @@ import javax.inject.Singleton
 @Singleton
 class ClaudeClient @Inject constructor(
     private val settingsStore: SettingsStore,
-    private val openRouterClient: OpenRouterClient
+    private val openRouterClient: OpenRouterClient,
+    private val rateLimiter: ApiRateLimiter
 ) : AiClient {
 
     private val json = Json {
@@ -58,8 +59,6 @@ class ClaudeClient @Inject constructor(
         .writeTimeout(30, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
-
-    private val rateLimiter = RateLimiter(maxRequests = 30, windowMs = 60_000)
 
     private data class ClaudeConfig(
         val apiKey: String,
@@ -137,6 +136,13 @@ class ClaudeClient @Inject constructor(
         }
     )
 
+    private val executeCommandToolWithoutGlassesCache by lazy {
+        executeCommandToolWithoutGlasses()
+    }
+
+    private fun getExecuteCommandTool(glassesEnabled: Boolean): JsonObject =
+        if (glassesEnabled) executeCommandTool else executeCommandToolWithoutGlassesCache
+
     // ── AiClient implementation ───────────────────────────────────────────────
 
     override suspend fun chat(
@@ -168,7 +174,7 @@ class ClaudeClient @Inject constructor(
             VesperPrompts.SYSTEM_PROMPT
         }
 
-        val tool = if (glassesEnabled) executeCommandTool else executeCommandToolWithoutGlasses()
+        val tool = getExecuteCommandTool(glassesEnabled)
         val anthropicMessages = buildAnthropicMessages(messages)
 
         val requestBody = buildJsonObject {
@@ -223,7 +229,7 @@ class ClaudeClient @Inject constructor(
         } else {
             VesperPrompts.SYSTEM_PROMPT
         }
-        val tool = if (glassesEnabled) executeCommandTool else executeCommandToolWithoutGlasses()
+        val tool = getExecuteCommandTool(glassesEnabled)
         val anthropicMessages = buildAnthropicMessages(messages)
 
         val requestBody = buildJsonObject {
