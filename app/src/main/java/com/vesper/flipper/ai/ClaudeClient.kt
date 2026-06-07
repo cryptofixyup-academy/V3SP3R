@@ -102,7 +102,7 @@ class ClaudeClient @Inject constructor(
             "properties" to JsonObject(mapOf(
                 "action" to JsonObject(mapOf(
                     "type" to JsonPrimitive("string"),
-                    "enum" to JsonArray(SUPPORTED_ACTIONS.map { JsonPrimitive(it) }),
+                    "enum" to JsonArray(CommandActions.SUPPORTED_ACTIONS.map { JsonPrimitive(it) }),
                     "description" to JsonPrimitive("The action to perform on the Flipper Zero (request_photo requires smart glasses)")
                 )),
                 "args" to JsonObject(mapOf(
@@ -128,7 +128,7 @@ class ClaudeClient @Inject constructor(
             val props = (schema["properties"] as JsonObject).toMutableMap()
             val actionProp = (props["action"] as JsonObject).toMutableMap()
             actionProp["enum"] = JsonArray(
-                SUPPORTED_ACTIONS.filter { it != "request_photo" }.map { JsonPrimitive(it) }
+                CommandActions.SUPPORTED_ACTIONS.filter { it != "request_photo" }.map { JsonPrimitive(it) }
             )
             props["action"] = JsonObject(actionProp)
             schema["properties"] = JsonObject(props)
@@ -863,15 +863,5 @@ class ClaudeClient @Inject constructor(
         )
         const val DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 
-        private val SUPPORTED_ACTIONS = listOf(
-            "list_directory", "read_file", "write_file", "create_directory",
-            "delete", "move", "rename", "copy", "get_device_info", "get_storage_info",
-            "search_faphub", "install_faphub_app", "push_artifact", "execute_cli",
-            "forge_payload", "search_resources", "list_vault", "run_runbook",
-            "launch_app", "subghz_transmit", "ir_transmit", "nfc_emulate",
-            "rfid_emulate", "ibutton_emulate", "badusb_execute", "ble_spam",
-            "led_control", "vibro_control", "browse_repo", "download_resource",
-            "github_search", "request_photo"
-        )
     }
 }

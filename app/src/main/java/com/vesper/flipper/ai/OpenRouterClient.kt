@@ -776,7 +776,7 @@ class OpenRouterClient @Inject constructor(
             }
             val action = parseCommandAction(actionValue) ?: return ParsedCommand(
                 error = "Unsupported action \"$actionValue\". " +
-                        "Supported actions: ${SUPPORTED_ACTIONS.joinToString(", ")}"
+                        "Supported actions: ${CommandActions.SUPPORTED_ACTIONS.joinToString(", ")}"
             )
 
             val argsElement = root["args"] ?: root["parameters"]
@@ -1415,40 +1415,6 @@ class OpenRouterClient @Inject constructor(
         /** Max unclosed brackets the repair function will close. */
         private const val MAX_REPAIR_BRACKET_DEPTH = 10
 
-        private val SUPPORTED_ACTIONS = listOf(
-            "list_directory",
-            "read_file",
-            "write_file",
-            "create_directory",
-            "delete",
-            "move",
-            "rename",
-            "copy",
-            "get_device_info",
-            "get_storage_info",
-            "search_faphub",
-            "install_faphub_app",
-            "push_artifact",
-            "execute_cli",
-            "forge_payload",
-            "search_resources",
-            "browse_repo",
-            "download_resource",
-            "github_search",
-            "list_vault",
-            "run_runbook",
-            "launch_app",
-            "subghz_transmit",
-            "ir_transmit",
-            "nfc_emulate",
-            "rfid_emulate",
-            "ibutton_emulate",
-            "badusb_execute",
-            "ble_spam",
-            "led_control",
-            "vibro_control",
-            "request_photo"
-        )
 
         private val TOOL_USE_FALLBACK_MODELS = listOf(
             "nousresearch/hermes-4-405b",
@@ -1483,40 +1449,7 @@ class OpenRouterClient @Inject constructor(
                     "properties" to JsonObject(mapOf(
                         "action" to JsonObject(mapOf(
                             "type" to JsonPrimitive("string"),
-                            "enum" to JsonArray(listOf(
-                                JsonPrimitive("list_directory"),
-                                JsonPrimitive("read_file"),
-                                JsonPrimitive("write_file"),
-                                JsonPrimitive("create_directory"),
-                                JsonPrimitive("delete"),
-                                JsonPrimitive("move"),
-                                JsonPrimitive("rename"),
-                                JsonPrimitive("copy"),
-                                JsonPrimitive("get_device_info"),
-                                JsonPrimitive("get_storage_info"),
-                                JsonPrimitive("search_faphub"),
-                                JsonPrimitive("install_faphub_app"),
-                                JsonPrimitive("push_artifact"),
-                                JsonPrimitive("execute_cli"),
-                                JsonPrimitive("forge_payload"),
-                                JsonPrimitive("search_resources"),
-                                JsonPrimitive("list_vault"),
-                                JsonPrimitive("run_runbook"),
-                                JsonPrimitive("launch_app"),
-                                JsonPrimitive("subghz_transmit"),
-                                JsonPrimitive("ir_transmit"),
-                                JsonPrimitive("nfc_emulate"),
-                                JsonPrimitive("rfid_emulate"),
-                                JsonPrimitive("ibutton_emulate"),
-                                JsonPrimitive("badusb_execute"),
-                                JsonPrimitive("ble_spam"),
-                                JsonPrimitive("led_control"),
-                                JsonPrimitive("vibro_control"),
-                                JsonPrimitive("browse_repo"),
-                                JsonPrimitive("download_resource"),
-                                JsonPrimitive("github_search"),
-                                JsonPrimitive("request_photo")
-                            )),
+                            "enum" to JsonArray(CommandActions.SUPPORTED_ACTIONS.map { JsonPrimitive(it) }),
                             "description" to JsonPrimitive("The action to perform on the Flipper Zero (request_photo requires smart glasses)")
                         )),
                         "args" to JsonObject(mapOf(
