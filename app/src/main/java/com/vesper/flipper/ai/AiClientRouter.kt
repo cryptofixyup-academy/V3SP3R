@@ -9,6 +9,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.GlobalScope
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -27,10 +31,21 @@ class AiClientRouter @Inject constructor(
     private val settingsStore: SettingsStore
 ) : AiClient {
 
-    private suspend fun active(): AiClient = when (settingsStore.aiProvider.first()) {
-        AiProvider.CLAUDE -> claudeClient
-        AiProvider.OPENROUTER -> openRouterClient
-    }
+    // Cache provider selection to avoid DataStore reads on every call
+    private val cachedActiveProvider = settingsStore.aiProvider
+        .map { provider ->
+            when (provider) {
+                AiProvider.CLAUDE -> claudeClient
+                AiProvider.OPENROUTER -> openRouterClient
+            }
+        }
+        .stateIn(
+            scope = GlobalScope,
+            started = SharingStarted.Eagerly,
+            initialValue = openRouterClient
+        )
+
+    private suspend fun active(): AiClient = cachedActiveProvider.value
 
     override suspend fun chat(messages: List<ChatMessage>, sessionId: String) =
         active().chat(messages, sessionId)
@@ -56,7 +71,7 @@ class AiClientRouter @Inject constructor(
         customSystemPrompt: String?
     ) = active().sendMessagesWithoutTools(messages, customSystemPrompt)
 
-    override fun parseCommandDetailed(arguments: String): OpenRouterClient.ParsedCommand =
+    override fun parseCommandDetailed(arguments: String): ParsedCommand =
         openRouterClient.parseCommandDetailed(arguments)
 
     override fun formatResult(result: CommandResult): String =
