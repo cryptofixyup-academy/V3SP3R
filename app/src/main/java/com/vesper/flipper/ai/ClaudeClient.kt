@@ -58,6 +58,14 @@ class ClaudeClient @Inject constructor(
 
     private val rateLimiter = RateLimiter(maxRequests = 30, windowMs = 60_000)
 
+    private val httpRetryExecutor = HttpRetryExecutor(
+        client = httpClient,
+        maxRetries = MAX_RETRIES,
+        initialDelayMs = INITIAL_RETRY_DELAY_MS,
+        maxDelayMs = MAX_RETRY_DELAY_MS,
+        tag = TAG
+    )
+
     // ── Tool definition (Anthropic format uses input_schema, not parameters) ──
 
     private val executeCommandTool = JsonObject(mapOf(
@@ -679,54 +687,22 @@ class ClaudeClient @Inject constructor(
             .post(body)
             .build()
 
-        var lastError: Exception? = null
-        var delayMs = INITIAL_RETRY_DELAY_MS
-
-        repeat(MAX_RETRIES) { attempt ->
-            try {
-                httpClient.newCall(request).execute().use { response ->
-                    val responseBody = response.body?.string()
-
-                    if (response.code == 429) {
-                        val retryAfter = response.header("retry-after")?.toLongOrNull() ?: 60
-                        delay(retryAfter * 1000)
-                        return@repeat
-                    }
-
-                    if (response.code in 500..599) {
-                        lastError = IOException("Server error: ${response.code}")
-                        delay(delayMs)
-                        delayMs = (delayMs * 2).coerceAtMost(MAX_RETRY_DELAY_MS)
-                        return@repeat
-                    }
-
-                    if (!response.isSuccessful) {
-                        val errBody = responseBody ?: "unknown error"
-                        Log.e(TAG, "Claude API error ${response.code}: $errBody")
-                        return parseErrorBody(response.code, errBody)
-                    }
-
-                    if (responseBody == null) {
-                        return ChatCompletionResult.Error("Empty response from Anthropic API")
-                    }
-
-                    return parseClaudeResponse(responseBody)
+        return httpRetryExecutor.execute(
+            request = request,
+            parseResponse = { responseBody ->
+                if (responseBody.isEmpty()) {
+                    ChatCompletionResult.Error("Empty response from Anthropic API")
+                } else {
+                    parseClaudeResponse(responseBody)
                 }
-            } catch (e: SocketTimeoutException) {
-                lastError = e
-                delay(delayMs)
-                delayMs = (delayMs * 2).coerceAtMost(MAX_RETRY_DELAY_MS)
-            } catch (e: IOException) {
-                lastError = e
-                delay(delayMs)
-                delayMs = (delayMs * 2).coerceAtMost(MAX_RETRY_DELAY_MS)
-            } catch (e: Exception) {
-                return ChatCompletionResult.Error("Request failed: ${e.message}")
+            },
+            onError = { code, message ->
+                if (code != 0) {
+                    parseErrorBody(code, message)
+                } else {
+                    ChatCompletionResult.Error(message)
+                }
             }
-        }
-
-        return ChatCompletionResult.Error(
-            "Request failed after $MAX_RETRIES attempts: ${lastError?.message}"
         )
     }
 
