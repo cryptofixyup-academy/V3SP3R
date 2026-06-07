@@ -119,7 +119,7 @@ class ClaudeClient @Inject constructor(
 
         val apiKey = settingsStore.claudeApiKey.first()
             ?: return@withContext ChatCompletionResult.Error("Anthropic API key not configured")
-        if (!isValidClaudeApiKey(apiKey)) {
+        if (!InputValidator.isValidApiKey(apiKey)) {
             return@withContext ChatCompletionResult.Error("Invalid Anthropic API key format")
         }
 
@@ -465,7 +465,7 @@ class ClaudeClient @Inject constructor(
         val requestBody = buildJsonObject {
             put("model", model)
             put("max_tokens", 500)
-            put("system", VISION_SYSTEM_PROMPT)
+            put("system", VisionConfig.VISION_SYSTEM_PROMPT)
             putJsonArray("messages") {
                 add(buildJsonObject {
                     put("role", "user")
@@ -823,10 +823,6 @@ class ClaudeClient @Inject constructor(
         else -> "high"
     }
 
-    private fun isValidClaudeApiKey(key: String): Boolean {
-        // Claude keys look like: sk-ant-api03-...  or  sk-ant-...
-        return key.length in 10..500 && key.matches(Regex("^[a-zA-Z0-9_.\\-:]+\$"))
-    }
 
     companion object {
         private const val TAG = "ClaudeClient"
@@ -842,12 +838,6 @@ class ClaudeClient @Inject constructor(
         private const val SIMPLE_MAX_TOKENS = 6144     // no thinking, single-turn
         private const val DEFAULT_MAX_TOKENS = 4096    // thinking + conversational response
 
-        private const val VISION_SYSTEM_PROMPT =
-            "You are a visual analysis assistant for a Flipper Zero companion app. " +
-            "Describe what you see in the image in detail. Focus on: brand names, model numbers, " +
-            "device types (TV, AC, car, remote control, gate, etc.), any visible text or labels, " +
-            "and any details that would help identify the correct IR/RF/NFC protocol or signal. " +
-            "Be specific and concise."
 
         val CLAUDE_MODELS = listOf(
             com.vesper.flipper.data.ModelInfo("claude-opus-4-7", "Claude Opus 4.7", "Most capable"),

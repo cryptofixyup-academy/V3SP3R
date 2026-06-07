@@ -255,7 +255,7 @@ class OpenRouterClient @Inject constructor(
         val visionMessages = listOf(
             OpenRouterMessage.text(
                 role = "system",
-                content = VISION_SYSTEM_PROMPT
+                content = VisionConfig.VISION_SYSTEM_PROMPT
             ),
             OpenRouterMessage.multimodal(
                 role = "user",
@@ -331,7 +331,7 @@ class OpenRouterClient @Inject constructor(
         val visionMessages = listOf(
             OpenRouterMessage.text(
                 role = "system",
-                content = VISION_SYSTEM_PROMPT
+                content = VisionConfig.VISION_SYSTEM_PROMPT
             ),
             OpenRouterMessage.multimodal(
                 role = "user",
@@ -734,10 +734,6 @@ class OpenRouterClient @Inject constructor(
         return parseCommandDetailed(arguments).command
     }
 
-    data class ParsedCommand(
-        val command: ExecuteCommand? = null,
-        val error: String? = null
-    )
 
     /**
      * Parse tool call arguments and include a diagnostic error on failure.
@@ -1477,13 +1473,6 @@ class OpenRouterClient @Inject constructor(
         )
         private val VISION_PREPROCESSING_MODEL = VISION_MODEL_CANDIDATES.first()
 
-        // Shared vision system prompt used by both image preprocessing and agent-initiated photo capture.
-        private const val VISION_SYSTEM_PROMPT =
-            "You are a visual analysis assistant for a Flipper Zero companion app. " +
-            "Describe what you see in the image in detail. Focus on: brand names, model numbers, " +
-            "device types (TV, AC, car, remote control, gate, etc.), any visible text or labels, " +
-            "and any details that would help identify the correct IR/RF/NFC protocol or signal. " +
-            "Be specific and concise."
 
         private val EXECUTE_COMMAND_TOOL = OpenRouterTool(
             type = "function",
