@@ -8,9 +8,12 @@ import com.vesper.flipper.security.RateLimiter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -57,6 +60,28 @@ class ClaudeClient @Inject constructor(
         .build()
 
     private val rateLimiter = RateLimiter(maxRequests = 30, windowMs = 60_000)
+
+    private data class ClaudeConfig(
+        val apiKey: String,
+        val model: String,
+        val glassesEnabled: Boolean
+    )
+
+    private val claudeConfig: Flow<ClaudeConfig> = combine(
+        settingsStore.claudeApiKey,
+        settingsStore.claudeModel,
+        settingsStore.glassesEnabled
+    ) { apiKey, model, glassesEnabled ->
+        ClaudeConfig(
+            apiKey = apiKey ?: "",
+            model = model ?: "claude-opus-4-7",
+            glassesEnabled = glassesEnabled
+        )
+    }.shareIn(
+        scope = kotlinx.coroutines.GlobalScope,
+        started = SharingStarted.Lazily,
+        replay = 1
+    )
 
     private val httpRetryExecutor = HttpRetryExecutor(
         client = httpClient,
@@ -125,14 +150,17 @@ class ClaudeClient @Inject constructor(
             )
         }
 
-        val apiKey = settingsStore.claudeApiKey.first()
-            ?: return@withContext ChatCompletionResult.Error("Anthropic API key not configured")
-        if (!InputValidator.isValidApiKey(apiKey)) {
+        val config = claudeConfig.first()
+        if (config.apiKey.isEmpty()) {
+            return@withContext ChatCompletionResult.Error("Anthropic API key not configured")
+        }
+        if (!InputValidator.isValidApiKey(config.apiKey)) {
             return@withContext ChatCompletionResult.Error("Invalid Anthropic API key format")
         }
 
-        val model = settingsStore.claudeModel.first()
-        val glassesEnabled = settingsStore.glassesEnabled.first()
+        val apiKey = config.apiKey
+        val model = config.model
+        val glassesEnabled = config.glassesEnabled
 
         val systemPrompt = if (glassesEnabled) {
             VesperPrompts.SYSTEM_PROMPT + "\n\n" + VesperPrompts.SMARTGLASSES_ADDENDUM
@@ -177,17 +205,19 @@ class ClaudeClient @Inject constructor(
             emit(ChatStreamEvent.StreamError("Rate limit exceeded"))
             return@flow
         }
-        val apiKey = settingsStore.claudeApiKey.first() ?: run {
+        val config = claudeConfig.first()
+        if (config.apiKey.isEmpty()) {
             emit(ChatStreamEvent.StreamError("Anthropic API key not configured"))
             return@flow
         }
-        if (!isValidClaudeApiKey(apiKey)) {
+        if (!InputValidator.isValidApiKey(config.apiKey)) {
             emit(ChatStreamEvent.StreamError("Invalid Anthropic API key format"))
             return@flow
         }
 
-        val model = settingsStore.claudeModel.first()
-        val glassesEnabled = settingsStore.glassesEnabled.first()
+        val apiKey = config.apiKey
+        val model = config.model
+        val glassesEnabled = config.glassesEnabled
         val systemPrompt = if (glassesEnabled) {
             VesperPrompts.SYSTEM_PROMPT + "\n\n" + VesperPrompts.SMARTGLASSES_ADDENDUM
         } else {
@@ -384,10 +414,12 @@ class ClaudeClient @Inject constructor(
 
     override suspend fun chatSimple(prompt: String): String? = withContext(Dispatchers.IO) {
         if (!rateLimiter.tryAcquire()) return@withContext null
-        val apiKey = settingsStore.claudeApiKey.first() ?: return@withContext null
-        if (!isValidClaudeApiKey(apiKey)) return@withContext null
+        val config = claudeConfig.first()
+        if (config.apiKey.isEmpty()) return@withContext null
+        if (!InputValidator.isValidApiKey(config.apiKey)) return@withContext null
 
-        val model = settingsStore.claudeModel.first()
+        val apiKey = config.apiKey
+        val model = config.model
         val requestBody = buildJsonObject {
             put("model", model)
             put("max_tokens", SIMPLE_MAX_TOKENS)
@@ -420,13 +452,16 @@ class ClaudeClient @Inject constructor(
         if (!rateLimiter.tryAcquire()) {
             return@withContext Result.failure(Exception("Rate limit exceeded"))
         }
-        val apiKey = settingsStore.claudeApiKey.first()
-            ?: return@withContext Result.failure(Exception("Anthropic API key not configured"))
-        if (!isValidClaudeApiKey(apiKey)) {
+        val config = claudeConfig.first()
+        if (config.apiKey.isEmpty()) {
+            return@withContext Result.failure(Exception("Anthropic API key not configured"))
+        }
+        if (!InputValidator.isValidApiKey(config.apiKey)) {
             return@withContext Result.failure(Exception("Invalid Anthropic API key format"))
         }
 
-        val model = settingsStore.claudeModel.first()
+        val apiKey = config.apiKey
+        val model = config.model
         val system = customSystemPrompt ?: VesperPrompts.SYSTEM_PROMPT
         val anthropicMessages = buildAnthropicMessages(messages)
 
